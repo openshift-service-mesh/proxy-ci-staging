@@ -10,7 +10,7 @@ ARTIFACT_NAME="${1:?Usage: upload-to-gcs.sh <artifact-name>}"
 export ARTIFACT_NAME
 
 if [[ "${DRY_RUN:-false}" == "true" ]]; then
-  echo "DRY RUN: would upload ${ARTIFACT_NAME} to gs://maistra-prow-testing/proxy/"
+  echo "DRY RUN: would upload ${ARTIFACT_NAME} to gs://maistra-prow-testing/proxy-staging/"
   echo "Artifact size: $(du -sh "${ARTIFACT_NAME}" | cut -f1)"
   exit 0
 fi
@@ -28,9 +28,9 @@ from google.cloud import storage
 client = storage.Client.from_service_account_json(os.environ['GCS_KEY_FILE'])
 bucket = client.bucket('maistra-prow-testing')
 artifact = os.environ['ARTIFACT_NAME']
-blob = bucket.blob(f'proxy/{artifact}')
+blob = bucket.blob(f'proxy-staging/{artifact}')
 blob.upload_from_filename(artifact)
-url = f'https://storage.googleapis.com/maistra-prow-testing/proxy/{artifact}'
+url = f'https://storage.googleapis.com/maistra-prow-testing/proxy-staging/{artifact}'
 print(f'Uploaded: {url}')
 EOF
 rm -f "${GCS_KEY_FILE}"
