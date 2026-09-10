@@ -1,0 +1,39 @@
+---
+name: Cleanup staging GCS artifacts
+
+on:
+  schedule:
+    - cron: '0 3 * * 0'  # Sundays at 3am UTC
+  workflow_dispatch:       # Manual trigger for testing
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete artifacts older than 7 days
+        env:
+          GCS_SERVICE_ACCOUNT_KEY: ${{ secrets.GCS_SERVICE_ACCOUNT_KEY }}
+        run: |
+          pip install --quiet google-cloud-storage
+          python3 - <<'PYEOF'
+          import os, datetime
+          from google.cloud import storage
+
+          key_file = '/tmp/gcs-key.json'
+          with open(key_file, 'w') as f:
+              f.write(os.environ['GCS_SERVICE_ACCOUNT_KEY'])
+
+          client = storage.Client.from_service_account_json(key_file)
+          bucket = client.bucket('maistra-prow-testing')
+          cutoff = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=7)
+          deleted = 0
+
+          for blob in bucket.list_blobs(prefix='proxy-staging/'):
+              if blob.time_created < cutoff:
+                  print(f'Deleting: {blob.name} (created {blob.time_created.date()})')
+                  blob.delete()
+                  deleted += 1
+
+          print(f'Done. Deleted {deleted} artifacts.')
+          os.remove(key_file)
+          PYEOF
