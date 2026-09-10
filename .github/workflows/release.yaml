@@ -13,7 +13,7 @@ name: Release artifact (post-merge)
 on:
   push:
     branches:
-      - release-1.28
+      - release-1.28-DISABLED
   workflow_dispatch:
     inputs:
       pr_head_sha:
