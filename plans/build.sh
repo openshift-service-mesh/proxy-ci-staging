@@ -7,6 +7,22 @@ source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 # Phase 1: Pre-fetch Go modules with network (like Cachi2 in Konflux)
 run_in_podman "go mod download"
 
+# Skip TestAttributeGen: downloads a WASM artifact at runtime (OSSM-1931).
+# Konflux does the same in proxy-test.Containerfile.
+echo "DEBUG: === sed skip TestAttributeGen START ==="
+echo "DEBUG: file exists check:"
+podman exec "${CNAME}" ls -la test/envoye2e/stats_plugin/stats_test.go
+echo "DEBUG: line BEFORE sed:"
+podman exec "${CNAME}" grep -n 'func TestAttributeGen' test/envoye2e/stats_plugin/stats_test.go || echo "DEBUG: pattern NOT FOUND before sed"
+echo "DEBUG: running sed..."
+run_in_podman "sed -i '/func TestAttributeGen/a \\\\tt.Skip(\"OSSM-1931: wasm download not available in hermetic build\")' test/envoye2e/stats_plugin/stats_test.go"
+echo "DEBUG: sed exit code from run_in_podman: $?"
+echo "DEBUG: line AFTER sed:"
+podman exec "${CNAME}" grep -n 'TestAttributeGen' test/envoye2e/stats_plugin/stats_test.go || echo "DEBUG: pattern NOT FOUND after sed"
+echo "DEBUG: showing lines 378-385 after sed:"
+podman exec "${CNAME}" sed -n '378,385p' test/envoye2e/stats_plugin/stats_test.go
+echo "DEBUG: === sed skip TestAttributeGen END ==="
+
 # Phase 2: Disconnect network (like unshare --net in Konflux)
 for net in $(podman inspect "${CNAME}" --format '{{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}'); do
   podman network disconnect --force "${net}" "${CNAME}"
