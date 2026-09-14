@@ -121,7 +121,7 @@ jobs:
         with:
           api_key: ${{ secrets.TESTING_FARM_PUBLIC_API_TOKEN }}
           api_url: https://api.testing-farm.io/v0.1
-          git_url: https://github.com/openshift-service-mesh/proxy.git
+          git_url: https://github.com/openshift-service-mesh/proxy-ci-staging.git
           git_ref: ${{ inputs.base_ref }}
           tmt_plan_regex: ^/plans/build$
           compose: CentOS-Stream-10
