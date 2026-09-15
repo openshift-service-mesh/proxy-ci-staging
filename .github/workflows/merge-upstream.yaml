@@ -1,9 +1,7 @@
 name: Merge upstream
 
 on:
-  schedule:
-    - cron: "10 */12 * * *"
-  workflow_dispatch:
+  workflow_dispatch: {}
 
 jobs:
   merge-upstream:
