@@ -22,11 +22,58 @@ LOCAL_RAM=$(( $(free -m | awk '/^Mem:/{print $2}') * 85 / 100 ))
 
 CNAME="${CNAME:-ossm-$$}"
 _TMPLOG=""
+_LOG_UPDATER_PID=""
+
 _cleanup() {
+  _stop_log_updater
   rm -f "${_TMPLOG}"
   podman rm -f "${CNAME}" 2>/dev/null || true
 }
 trap _cleanup EXIT
+
+_update_log_comment() {
+  local logfile="$1"
+  [[ -z "${LOG_TOKEN:-}" || -z "${LOG_COMMENT_ID:-}" || -z "${LOG_REPO:-}" ]] && return 0
+  [[ ! -s "${logfile}" ]] && return 0
+
+  local content
+  content=$(tail -200 "${logfile}" 2>/dev/null | head -c 60000 || true)
+  [[ -z "${content}" ]] && return 0
+
+  local timestamp
+  timestamp=$(date -u +%H:%M:%S)
+
+  local body
+  body=$(printf '### Build log (%s)\n\n~~~\n%s\n~~~\n\n_Updated: %s UTC_' \
+    "${ARCH:-unknown}" "${content}" "${timestamp}")
+
+  local json
+  json=$(python3 -c "import json,sys; print(json.dumps({'body': sys.stdin.read()}))" <<< "${body}")
+
+  curl -sf -X PATCH \
+    -H "Authorization: token ${LOG_TOKEN}" \
+    -H "Accept: application/vnd.github.v3+json" \
+    "https://api.github.com/repos/${LOG_REPO}/issues/comments/${LOG_COMMENT_ID}" \
+    -d "${json}" > /dev/null 2>&1 || true
+}
+
+_start_log_updater() {
+  local logfile="$1"
+  [[ -z "${LOG_TOKEN:-}" ]] && return 0
+  (
+    while [[ -f "${logfile}" ]]; do
+      _update_log_comment "${logfile}"
+      sleep 30
+    done
+  ) &
+  _LOG_UPDATER_PID=$!
+}
+
+_stop_log_updater() {
+  [[ -n "${_LOG_UPDATER_PID:-}" ]] && kill "${_LOG_UPDATER_PID}" 2>/dev/null || true
+  wait "${_LOG_UPDATER_PID}" 2>/dev/null || true
+  _LOG_UPDATER_PID=""
+}
 
 podman run -d --name "${CNAME}" \
   --pids-limit=-1 \
@@ -42,8 +89,13 @@ run_in_podman() {
   local cmd="$1"
   _TMPLOG=$(mktemp)
 
+  _start_log_updater "${_TMPLOG}"
+
   local exit_code=0
   podman exec --workdir /work "${CNAME}" bash -c "${cmd}" > "${_TMPLOG}" 2>&1 || exit_code=$?
+
+  _stop_log_updater
+  _update_log_comment "${_TMPLOG}"
 
   if [[ ${exit_code} -eq 0 ]]; then
     echo "=== first 300 lines ==="

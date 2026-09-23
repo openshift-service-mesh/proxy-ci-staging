@@ -43,6 +43,7 @@ jobs:
     needs: setup
     runs-on: ubuntu-latest
     permissions:
+      issues: write
       pull-requests: read
       statuses: write
     strategy:
@@ -115,6 +116,48 @@ jobs:
 
             core.info(`Inputs validated: PR #${prNumber}, SHA ${headSha}`);
 
+      - name: Create live log comment
+        id: log_comment
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        env:
+          INPUT_PR_NUMBER: ${{ inputs.pr_number }}
+          ARCH: ${{ matrix.arch }}
+        with:
+          script: |
+            const prNumber = parseInt(process.env.INPUT_PR_NUMBER);
+            const arch = process.env.ARCH;
+
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prNumber
+            });
+
+            const staleHeaders = [
+              `### Build log (${arch})`,
+              `### CANCELLED -- Build log (${arch})`,
+              `### FAILED -- Build log (${arch})`
+            ];
+
+            for (const c of comments) {
+              if (c.user.login === 'github-actions[bot]' &&
+                  staleHeaders.some(h => c.body.startsWith(h))) {
+                await github.rest.issues.deleteComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  comment_id: c.id
+                });
+              }
+            }
+
+            const { data } = await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prNumber,
+              body: `### Build log (${arch})\n\n_Waiting for Testing Farm..._`
+            });
+            core.setOutput('comment_id', String(data.id));
+
       - name: Run build on Testing Farm bare metal
         id: tf
         uses: sclorg/testing-farm-as-github-action@230555baceb860aa468d216f1822974836b965d1 # v4
@@ -128,13 +171,84 @@ jobs:
           arch: ${{ matrix.arch }}
           tmt_hardware: '{"virtualization": {"is-virtualized": false}}'
           environment_settings: '{"pipeline": {"skip_guest_setup": true}}'
-          variables: "SOURCE_REPO=${{ inputs.source_repo }};SOURCE_REF=${{ inputs.head_sha }}"
+          variables: "SOURCE_REPO=${{ inputs.source_repo }};SOURCE_REF=${{ inputs.head_sha }};ARCH=${{ matrix.arch }}"
+          secrets: "LOG_TOKEN=${{ secrets.GITHUB_TOKEN }};LOG_COMMENT_ID=${{ steps.log_comment.outputs.comment_id }};LOG_REPO=${{ github.repository }}"
           timeout: 120
           update_pull_request_status: true
           pull_request_status_name: ${{ matrix.status_name }}
           create_issue_comment: false
           commit_sha: ${{ inputs.head_sha }}
           pr_number: ${{ inputs.pr_number }}
+
+      - name: Delete live log comment
+        if: steps.tf.outcome == 'success'
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        env:
+          COMMENT_ID: ${{ steps.log_comment.outputs.comment_id }}
+        with:
+          script: |
+            if (!process.env.COMMENT_ID) return;
+            await github.rest.issues.deleteComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              comment_id: parseInt(process.env.COMMENT_ID)
+            });
+
+      - name: Mark log comment as cancelled
+        if: cancelled()
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        env:
+          COMMENT_ID: ${{ steps.log_comment.outputs.comment_id }}
+        with:
+          script: |
+            if (!process.env.COMMENT_ID) return;
+            const commentId = parseInt(process.env.COMMENT_ID);
+            try {
+              const { data: comment } = await github.rest.issues.getComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: commentId
+              });
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: commentId,
+                body: comment.body.replace(
+                  /^### Build log/,
+                  '### CANCELLED -- Build log'
+                )
+              });
+            } catch (e) {
+              core.warning(`Could not mark comment as cancelled: ${e.message}`);
+            }
+
+      - name: Mark log comment as failed
+        if: failure()
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        env:
+          COMMENT_ID: ${{ steps.log_comment.outputs.comment_id }}
+        with:
+          script: |
+            if (!process.env.COMMENT_ID) return;
+            const commentId = parseInt(process.env.COMMENT_ID);
+            try {
+              const { data: comment } = await github.rest.issues.getComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: commentId
+              });
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: commentId,
+                body: comment.body.replace(
+                  /^### Build log/,
+                  '### FAILED -- Build log'
+                )
+              });
+            } catch (e) {
+              core.warning(`Could not mark comment as failed: ${e.message}`);
+            }
 
       - name: Verify single plan executed
         if: always() && steps.tf.outputs.request_id != ''
